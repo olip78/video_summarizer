@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  summarizer:
+    image: "${MANAGER_HOST}:4000/video_summarizer:${STAGE}"
+    container_name: video_summarizer
+    logging:
+      driver: journald
+      options:
+        tag: video_summarizer
+    env_file:
+      - ./.env
+    ports:
+      - "8501:8501"
+    networks:
+      - summarizer_frontend
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+networks:
+  summarizer_frontend:
+    external: true

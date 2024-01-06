@@ -1,0 +1,66 @@
+image: docker:latest    
+stages:
+  - build
+  - deploy
+
+variables: 
+  STAGE: stage
+  STAGE_SERVER_IP: 158.160.109.15
+  MANAGER_HOST: 159.223.16.238
+  STAGE_SERVER_USER: olipandrei
+  STAGE_IMAGE_APP_TAG: "${STAGE_SERVER_IP}:4000/video_summarizer:${STAGE}"
+  OPENAI_API_KEY: $OPENAI_API_KEY
+
+services:
+  - docker:dind
+
+build:
+  stage: build
+  before_script:   
+    - 'which ssh-agent || ( apt-get install -qq openssh-client )'
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - 'echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+
+    - ssh ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "chmod 755 /home/olipandrei"
+
+    - scp -prq src/. ${STAGE_SERVER_USER}@${STAGE_SERVER_IP}:/home/olipandrei/src
+    - scp -r app.py ${STAGE_SERVER_USER}@${STAGE_SERVER_IP}:/home/olipandrei/app.py
+    - scp -r requirements.txt ${STAGE_SERVER_USER}@${STAGE_SERVER_IP}:/home/olipandrei/requirements.txt
+    - scp -r Dockerfile ${STAGE_SERVER_USER}@${STAGE_SERVER_IP}:/home/olipandrei/Dockerfile
+
+  script:
+    - ssh ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "docker build -t video_summarizer:stage -f ./Dockerfile ."
+    - ssh ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "docker tag video_summarizer:stage $STAGE_IMAGE_APP_TAG"
+    - ssh ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "docker push $STAGE_IMAGE_APP_TAG"
+  only:
+    - pre-prod
+    - main
+  after_script:
+    - ssh -T ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "rm -r /home/olipandrei/src"
+    - ssh -T ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "rm -r /home/olipandrei/app.py"
+    - ssh -T ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "rm -r /home/olipandrei/requirements.txt"
+    - ssh -T ${STAGE_SERVER_USER}@${STAGE_SERVER_IP} "rm -r /home/olipandrei/Dockerfile"
+
+deploy-to-stage:
+  stage: deploy
+  before_script:   
+    - 'which ssh-agent || ( apt-get install -qq openssh-client )'
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - 'echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+    
+    - scp -r app_stack.yml root@${MANAGER_HOST} :/root/app_stack.yml
+  
+  script:
+    - ssh root@${MANAGER_HOST}  "docker network create --driver overlay summarizer_frontend"
+    - ssh root@${MANAGER_HOST}  "OPENAI_API_KEY=${OPENAI_API_KEY} docker service create --name summarizer --network summarizer_frontend -p 8501:8501 --env OPENAI_API_KEY=$OPENAI_API_KEY $STAGE_IMAGE_APP_TAG"
+
+  only:
+    - pre-prod
+    - main
+  after_script:
+    - ssh -T root@${MANAGER_HOST} "rm -r /home/olipandrei/app_stack.yml"
+
